@@ -1612,3 +1612,117 @@ Every entity is associated with a given EntityState:
 
 ![alt text](image-2.png)
 
+# performance
+### Identifying slow database commands via logging (development env or temporary on prod maybe via configuration)
+```csharp
+protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+{
+    optionsBuilder
+        .UseSqlServer(@"Server=(localdb)\mssqllocaldb;Database=Blogging;Trusted_Connection=True;ConnectRetryCount=0")
+        .LogTo(Console.WriteLine, LogLevel.Information);
+}
+```
+```csharp
+private static ILoggerFactory ContextLoggerFactory
+    => LoggerFactory.Create(b => b.AddConsole().AddFilter("", LogLevel.Information));
+
+protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+{
+    optionsBuilder
+        .UseSqlServer(@"Server=(localdb)\mssqllocaldb;Database=Blogging;Trusted_Connection=True;ConnectRetryCount=0")
+        .UseLoggerFactory(ContextLoggerFactory);
+}
+```
+```log
+info: 06/12/2020 09:12:36.117 RelationalEventId.CommandExecuted[20101] (Microsoft.EntityFrameworkCore.Database.Command)
+      Executed DbCommand (4ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
+      SELECT [b].[Id], [b].[Name]
+      FROM [Blogs] AS [b]
+      WHERE [b].[Name] = N'foo'
+```
+One problem with command execution logging is that it's sometimes difficult to correlate SQL queries and LINQ queries: the SQL commands executed by EF can look very different from the LINQ queries from which they were generated. To help with this difficulty, you may want to use EF's query tags feature, which allows you to inject a small, identifying comment into the SQL query.
+
+### other ways
+ssms, profiler, query execution plan, etc.
+
+### efficient querying
+*   Use indexes properly
+*   Project only properties you need
+*   Limit the resultset size
+*   Efficient pagination
+*   Avoid cartesian explosion when loading related entities
+*   Load related entities eagerly when possible
+*   Beware of lazy loading
+*   Buffering and streaming
+```csharp
+// ToList and ToArray cause the entire resultset to be buffered:
+var blogsList = context.Posts.Where(p => p.Title.StartsWith("A")).ToList();
+var blogsArray = context.Posts.Where(p => p.Title.StartsWith("A")).ToArray();
+
+// Foreach streams, processing one row at a time:
+foreach (var blog in context.Posts.Where(p => p.Title.StartsWith("A")))
+{
+    // ...
+}
+
+// AsEnumerable also streams, allowing you to execute LINQ operators on the client-side:
+var doubleFilteredBlogs = context.Posts
+    .Where(p => p.Title.StartsWith("A")) // Translated to SQL and executed in the database
+    .AsEnumerable()
+    .Where(p => SomeDotNetMethod(p)); // Executed at the client on all database results
+```
+*   Internal buffering by EF
+*   Tracking, no-tracking and identity resolution
+*   Using SQL queries
+*   Asynchronous programming
+
+### efficient updating
+*   Batching
+```csharp
+var blog = context.Blogs.Single(b => b.Url == "http://someblog.microsoft.com");
+blog.Url = "http://someotherblog.microsoft.com";
+context.Add(new Blog { Url = "http://newblog1.microsoft.com" });
+context.Add(new Blog { Url = "http://newblog2.microsoft.com" });
+context.SaveChanges();
+```
+*   Use ExecuteUpdate and ExecuteDelete when relevant
+
+### modeling for Performance
+*   Denormalization and caching
+*   Stored computed columns
+*   Update cache columns when inputs change
+*   Materialized/indexed views
+*   Inheritance mapping
+
+### advanced performance topics
+*   DbContext pooling (use case in multi tenant apps)
+```csharp
+builder.Services.AddDbContextPool<WeatherForecastContext>(
+    o => o.UseSqlServer(builder.Configuration.GetConnectionString("WeatherForecastContext")));
+```
+*   Compiled queries
+*   Query caching and parameterization
+*   Dynamically-constructed queries
+*   Compiled models
+```shell
+PS C:\dotnet\efdocs\samples\core\Miscellaneous\CompiledModels> dotnet ef dbcontext optimize --output-dir MyCompiledModels --namespace MyCompiledModels
+Build started...
+Build succeeded.
+Successfully generated a compiled model, to use it call 'options.UseModel(MyCompiledModels.BlogsContextModel.Instance)'. Run this command again when the model is modified.
+PS C:\dotnet\efdocs\samples\core\Miscellaneous\CompiledModels>
+```
+```csharp
+protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    => optionsBuilder
+        .UseModel(MyCompiledModels.BlogsContextModel.Instance)
+        .UseSqlite(@"Data Source=test.db");
+```
+*   Compiled model bootstrapping
+*   Reducing runtime overhead
+
+
+#
+
+# Contribute please and make it better in any forms from contexts to structure
+
+
